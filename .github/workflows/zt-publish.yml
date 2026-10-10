@@ -1,0 +1,32 @@
+name: zt-publish
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "token|exchange|battery"
+        default: "exchange"
+        required: true
+      audience:
+        description: "audience override (empty = default)"
+        default: ""
+      target_org:
+        description: "exchange org"
+        default: "pratik-sec-test"
+      target_pkg:
+        description: "exchange package"
+        default: "zt-tp-test"
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Battery
+        env:
+          MODE: ${{ inputs.mode }}
+          AUDIENCE_IN: ${{ inputs.audience }}
+          TARGET_ORG: ${{ inputs.target_org }}
+          TARGET_PKG: ${{ inputs.target_pkg }}
+        run: python3 scripts/zt-battery.py
