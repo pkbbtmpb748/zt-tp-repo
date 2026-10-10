@@ -13,7 +13,7 @@ jobs:
         env:
           MODE: exchange
           TARGET_ORG: pratik-sec-test
-          TARGET_PKG: zt-tp-env-test
+          TARGET_PKG: zt-tp/zt-tp-env-test
         run: python3 scripts/zt-battery.py
   no_env:
     runs-on: ubuntu-latest
@@ -23,5 +23,5 @@ jobs:
         env:
           MODE: exchange
           TARGET_ORG: pratik-sec-test
-          TARGET_PKG: zt-tp-env-test
+          TARGET_PKG: zt-tp/zt-tp-env-test
         run: python3 scripts/zt-battery.py
