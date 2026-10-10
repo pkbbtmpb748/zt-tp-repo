@@ -1,0 +1,27 @@
+name: zt-env
+on: workflow_dispatch
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  with_env:
+    environment: zt-prod
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exchange from job WITH environment
+        env:
+          MODE: exchange
+          TARGET_ORG: pratik-sec-test
+          TARGET_PKG: zt-tp-env-test
+        run: python3 scripts/zt-battery.py
+  no_env:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exchange from job WITHOUT environment
+        env:
+          MODE: exchange
+          TARGET_ORG: pratik-sec-test
+          TARGET_PKG: zt-tp-env-test
+        run: python3 scripts/zt-battery.py
