@@ -1,0 +1,16 @@
+name: zt-other
+on: workflow_dispatch
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exchange from non-configured workflow file
+        env:
+          MODE: exchange
+          TARGET_ORG: pratik-sec-test
+          TARGET_PKG: zt-tp-test
+        run: python3 scripts/zt-battery.py
