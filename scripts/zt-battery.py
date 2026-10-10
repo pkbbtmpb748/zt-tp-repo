@@ -151,8 +151,8 @@ def main():
          exchange(I, pkg="psr%2Flog%2E%2E%2Fzt-tp%2Fzt-tp-test"))
 
     if key and secret:
-        z1 = make_zip("zt-tp/zt-tp-test", "1.0.1")
-        z2 = make_zip("zt-tp/zt-tp-new", "1.0.0")
+        z1 = make_zip(TARGET_PKG, "1.0.1")
+        z2 = make_zip(TARGET_PKG, "1.0.0")
         upload("/api/packages/zt-tp%2Fzt-tp-test/artifacts/", key, secret, z1, "zt-tp-test-1.0.1.zip",
                "P1-ZIP-UPLOAD own package (custom type -> expect 400)")
         upload("/api/packages/psr%2Flog/artifacts/", key, secret, z1, "zt-tp-test-1.0.1.zip",
