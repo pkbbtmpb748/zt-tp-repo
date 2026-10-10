@@ -4,7 +4,7 @@
 # Modes via env MODE: token | exchange | battery
 # Env: AUDIENCE_IN (override), TARGET_ORG, TARGET_PKG
 import base64, hashlib, hmac, io, json, os, secrets, sys, time, urllib.error, urllib.request, zipfile
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, urlencode, quote as uquote
 
 API = "https://packagist.com"
 HOST = "packagist.com"
@@ -152,12 +152,13 @@ def main():
 
     if key and secret:
         z1 = make_zip(TARGET_PKG, "1.0.1")
-        z2 = make_zip(TARGET_PKG, "1.0.0")
-        upload("/api/packages/zt-tp%2Fzt-tp-test/artifacts/", key, secret, z1, "zt-tp-test-1.0.1.zip",
-               "P1-ZIP-UPLOAD own package (custom type -> expect 400)")
+        z2 = make_zip(TARGET_PKG, "1.0.2")
+        enc = uquote(TARGET_PKG, safe="")
+        upload(f"/api/packages/{enc}/artifacts/", key, secret, z1, "zt-tp-test-1.0.1.zip",
+               "P1-ZIP-UPLOAD own package (target-scoped)")
         upload("/api/packages/psr%2Flog/artifacts/", key, secret, z1, "zt-tp-test-1.0.1.zip",
                "P2-ZIP-UPLOAD cross-package psr%2Flog (expect 404)")
-        st, hd, body = upload("/api/packages/artifacts/", key, secret, z2, "zt-tp-new-1.0.0.zip",
+        st, hd, body = upload("/api/packages/artifacts/", key, secret, z2, "zt-tp-new-1.0.2.zip",
                               "P3-ZIP-UPLOAD unbound")
         aid = None
         try:
@@ -167,7 +168,7 @@ def main():
         if aid:
             signed("POST", "/api/packages/", key, secret,
                    body=json.dumps({"repoType": "artifact", "artifactIds": [aid]}), label="P4-CREATE artifact pkg from upload")
-        signed("GET", "/api/packages/zt-tp%2Fzt-tp-test/", key, secret, label="P5-GET own package")
+        signed("GET", f"/api/packages/{enc}/", key, secret, label="P5-GET own package")
         signed("GET", "/api/packages/", key, secret, label="P6-GET package list (scope check)")
     out("BATTERY-DONE")
 
