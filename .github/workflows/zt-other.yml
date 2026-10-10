@@ -12,5 +12,5 @@ jobs:
         env:
           MODE: exchange
           TARGET_ORG: pratik-sec-test
-          TARGET_PKG: zt-tp-test
+          TARGET_PKG: zt-tp/zt-tp-test
         run: python3 scripts/zt-battery.py
